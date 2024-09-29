@@ -5,67 +5,81 @@ import dbConnect from '../../lib/db';
 import Auction from '../../models/Auction';
 import Bid from '../../models/Bid';
 
+// Disable Next.js default body parser
 export const config = {
   api: {
-    bodyParser: false, // Disable Next.js default body parser
+    bodyParser: false,
   },
+};
+
+// Helper function to parse form data using Formidable
+const parseForm = (req) => {
+  return new Promise((resolve, reject) => {
+    const form = new IncomingForm({
+      uploadDir: path.join(process.cwd(), '/public/uploads'),
+      keepExtensions: true,
+      maxFileSize: 5 * 1024 * 1024, // 5MB file size limit
+    });
+
+    // Ensure the 'public/uploads' directory exists
+    if (!fs.existsSync(path.join(process.cwd(), '/public/uploads'))) {
+      fs.mkdirSync(path.join(process.cwd(), '/public/uploads'), { recursive: true });
+    }
+
+    form.parse(req, (err, fields, files) => {
+      if (err) return reject(err);
+      resolve({ fields, files });
+    });
+  });
 };
 
 export default async function handler(req, res) {
   await dbConnect();
 
   if (req.method !== 'POST') {
-    return res.status(405).json({ message: 'Method Not Allowed' });
+    res.setHeader('Allow', ['POST']);
+    return res.status(405).end(`Method ${req.method} Not Allowed`);
   }
 
-  // Set the upload directory to /uploads
-  const uploadDir = path.join(process.cwd(), '/public/uploads');
-  if (!fs.existsSync(uploadDir)) {
-    fs.mkdirSync(uploadDir, { recursive: true });
-  }
+  try {
+    // Parse form data and files
+    const { fields, files } = await parseForm(req);
 
-  const form = new IncomingForm({
-    uploadDir: uploadDir, // Set the upload directory to /uploads
-    keepExtensions: true, // Keep file extensions
-    maxFileSize: 5 * 1024 * 1024, // Limit file size to 5MB
-  });
-
-  form.parse(req, async (err, fields, files) => {
-    if (err) {
-      console.error('Error parsing form data:', err);
-      return res.status(500).json({ message: 'Error parsing form data' });
-    }
-
-    const { auctionId, bidderId, itemName, itemDescription } = fields;
-    const itemImage = files.image ? `/uploads/${files.image.newFilename}` : null;
+    // Convert arrays to strings (Formidable may return arrays for text fields)
+    const auctionId = Array.isArray(fields.auctionId) ? fields.auctionId[0] : fields.auctionId;
+    const bidderId = Array.isArray(fields.bidderId) ? fields.bidderId[0] : fields.bidderId;
+    const itemName = Array.isArray(fields.itemName) ? fields.itemName[0] : fields.itemName;
+    const itemDescription = Array.isArray(fields.itemDescription) ? fields.itemDescription[0] : fields.itemDescription;
 
     if (!auctionId || !bidderId || !itemName || !itemDescription) {
       return res.status(400).json({ message: 'Missing required fields' });
     }
 
-    try {
-      // Verify the auction exists
-      const auction = await Auction.findById(auctionId);
-      if (!auction) {
-        return res.status(404).json({ message: 'Auction not found' });
-      }
+    // Access the uploaded image file
+    const image = files.image && files.image[0];
+    const itemImage = image ? `/uploads/${image.newFilename}` : null;
 
-      // Create a new bid
-      const newBid = new Bid({
-        auction: auctionId,
-        bidder: bidderId,
-        itemName,
-        itemDescription,
-        itemImage, // Optional item image
-      });
-
-      // Save the bid to the database
-      await newBid.save();
-
-      return res.status(200).json({ message: 'Bid added successfully', bid: newBid });
-    } catch (error) {
-      console.error('Error adding bid:', error);
-      return res.status(500).json({ message: 'Error adding bid' });
+    // Verify the auction exists
+    const auction = await Auction.findById(auctionId);
+    if (!auction) {
+      return res.status(404).json({ message: 'Auction not found' });
     }
-  });
+
+    // Create a new bid
+    const newBid = new Bid({
+      auction: auctionId,
+      bidder: bidderId,
+      itemName,
+      itemDescription,
+      itemImage, // Optional item image
+    });
+
+    // Save the bid to the database
+    await newBid.save();
+
+    return res.status(200).json({ message: 'Bid added successfully', bid: newBid });
+  } catch (error) {
+    console.error('Error adding bid:', error);
+    return res.status(500).json({ message: 'Error adding bid' });
+  }
 }
